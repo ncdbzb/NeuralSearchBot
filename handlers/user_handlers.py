@@ -2,14 +2,16 @@ from random import sample
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config_data.config import load_config, Config
 from lexicon.lexicon import LEXICON
 from keyboards.keyboards import (start_keyboard, filter_keyboard, convert_keyboards, app_scope_keyboards,
                                  tasks_keyboards, show_keyboard)
-from dispatcher.dispatcher import storage
+from dispatcher.dispatcher import dp, storage
 from services.buttons_lists import *
 from services.picked_filters_message import form_message
 from services.form_sql_query import form_sql_query
@@ -21,11 +23,12 @@ class FSMGame(StatesGroup):
     search_message = State()
 
 
+config: Config = load_config('.env')
 db = Database()
 router = Router()
-picked_filters_dict = {'app_scope': [],
-                       'converting': [],
-                       'tasks': []}
+# picked_filters_dict = {'app_scope': [],
+#                        'converting': [],
+#                        'tasks': []}
 matches_of_five = []
 show_more_keyboards = []
 show_less_keyboards = []
@@ -37,6 +40,10 @@ show_less_responses_list = []
 async def process_start_command(message: Message, state: FSMContext):
     await message.answer(text=LEXICON['start'].format(message.from_user.first_name), parse_mode='html',
                          reply_markup=start_keyboard.as_markup(resize_keyboard=True))
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=message.chat.id, user_id=message.from_user.id)
+    data = await dp.storage.get_data(key)
+    if 'picked_filters_dict' not in data.keys():
+        await dp.storage.update_data(key=key, data={'picked_filters_dict': {'app_scope': [], 'converting': [], 'tasks': []}})
     await state.clear()
 
 
@@ -49,6 +56,9 @@ async def process_search_message(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == 'filter_button_pressed')
 async def process_filter_button(callback: CallbackQuery):
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=callback.message.chat.id, user_id=callback.from_user.id)
+    data = await dp.storage.get_data(key)
+    picked_filters_dict = data['picked_filters_dict']
     picked_filters_message = form_message(picked_filters_dict)
     await callback.message.answer(text=LEXICON['filter_process'].format(picked_filters_message), parse_mode='html',
                                   reply_markup=filter_keyboard.as_markup(resize_keyboard=True))
@@ -118,6 +128,9 @@ async def process_back_button(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'return_button_pressed')
 async def process_return_button(callback: CallbackQuery):
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=callback.message.chat.id, user_id=callback.from_user.id)
+    data = await dp.storage.get_data(key)
+    picked_filters_dict = data['picked_filters_dict']
     picked_filters_message = form_message(picked_filters_dict)
     await callback.message.edit_text(text=LEXICON['filter_process'].format(picked_filters_message), parse_mode='html',
                                      reply_markup=filter_keyboard.as_markup(resize_keyboard=True))
@@ -125,8 +138,10 @@ async def process_return_button(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'clear_button_pressed')
 async def process_clear_button(callback: CallbackQuery):
-    for i in picked_filters_dict.keys():
-        picked_filters_dict[i] = []
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=callback.message.chat.id, user_id=callback.from_user.id)
+    await dp.storage.update_data(key=key, data={'picked_filters_dict': {'app_scope': [], 'converting': [], 'tasks': []}})
+    data = await dp.storage.get_data(key)
+    picked_filters_dict = data['picked_filters_dict']
     picked_filters_message = form_message(picked_filters_dict)
     await callback.message.edit_text(text=LEXICON['filter_process'].format(picked_filters_message), parse_mode='html',
                                      reply_markup=filter_keyboard.as_markup(resize_keyboard=True))
@@ -134,7 +149,10 @@ async def process_clear_button(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'find_button_pressed')
 async def process_find_button(callback: CallbackQuery):
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=callback.message.chat.id, user_id=callback.from_user.id)
     matches_of_five.clear()
+    data = await dp.storage.get_data(key)
+    picked_filters_dict = data['picked_filters_dict']
     sql_query = form_sql_query(picked_filters_dict)
     if sql_query.startswith('SELECT'):
         matches = db.get_data(sql_query)
@@ -215,6 +233,9 @@ async def process_next_neural_button(callback: CallbackQuery):
 
 @router.callback_query(F.data.in_(app_scope_callback_list + convert_callback_list[:-1] + tasks_callback_list))
 async def process_click_button(callback: CallbackQuery):
+    key = StorageKey(bot_id=config.tg_bot.bot_id, chat_id=callback.message.chat.id, user_id=callback.from_user.id)
+    data = await dp.storage.get_data(key)
+    picked_filters_dict = data['picked_filters_dict']
     cb_data = callback.data
     if cb_data in app_scope_callback_list:
         index = app_scope_callback_list.index(cb_data)
@@ -243,3 +264,5 @@ async def process_click_button(callback: CallbackQuery):
         else:
             picked_filters_dict['tasks'].remove(mess)
             await callback.answer(text='Выбор отменен')
+
+    await dp.storage.update_data(key=key, data={'picked_filters_dict': picked_filters_dict})
